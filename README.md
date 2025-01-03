@@ -72,7 +72,7 @@ performance:
    ```
 3. Run the training:
    ```bash
-   python my_MLP_trainer.py
+   python MLP_trainer.py
    ```
 
 ## Memory Efficiency
