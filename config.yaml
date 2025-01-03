@@ -1,0 +1,114 @@
+# best_model:
+#   best_metric_name: f1
+#   best_metric_value: 0.33651294366233697
+#   dropout_rate: 0.17533705228218693
+#   hidden_layers:
+#   - 247
+#   - 83
+#   - 197
+#   - 502
+#   learning_rate: 0.00016242142955762035
+#   use_batch_norm: true
+#   weight_decay: 0.0
+#   warmup_steps: 0  # Will be updated after tuning
+data:
+  target_column: target
+  train_path: data/train.csv
+  val_path: data/val.csv
+model:
+  input_size: 4  # Example value
+  num_classes: 4
+  save_path: checkpoints/best_model.pt
+optimization:
+  early_stopping:
+    min_delta: 0.001
+    patience: 10
+  n_trials: 1000
+  optimization_metric: f1
+  regularization:
+    batch_norm_prob: 0.5
+    weight_decay_range:
+    - 1e-5
+    - 1e-2
+  warmup:
+    enabled: true
+    min_steps: 0
+    max_steps: 1000  # Adjust based on your dataset size
+training:
+  # Increase batch size for better CPU utilization
+  batch_size: 64  
+  
+  dataloader:
+    # Adjust num_workers based on CPU cores
+    num_workers: 8  # Typically 2x number of CPU cores
+    pin_memory: true  # Enable even for CPU
+    persistent_workers: true  # Keep workers alive between epochs
+    prefetch_factor: 2  # Number of batches loaded in advance
+
+  # Add CPU optimization settings
+  cpu_optimization:
+    enable_mkldnn: true
+    num_threads: "auto"  # Will use os.cpu_count()
+    use_bfloat16: true
+    
+  # Add performance monitoring
+  profiling:
+    enabled: true
+    export_trace: true
+    trace_path: "cpu_trace.json"
+
+  device: cpu
+  drop_last: true
+  epochs: 100
+  loss_function: CrossEntropyLoss
+  num_workers: 4
+  optimization_metric: f1
+  optimizer_choice: Adam
+  optimizer_params:
+    Adam:
+      base_lr: 1.0e-4  # This becomes our base learning rate
+      betas:
+      - 0.9
+      - 0.999
+      eps: 1.0e-08
+    SGD:
+      lr: 0.01
+      momentum: 0.9
+  seed: 42
+  validation:
+    frequency: 1
+    metrics:
+    - accuracy
+    - f1_score
+
+  performance:
+    enable_mkldnn: true
+    enable_mkl: true
+    num_workers: 8  # Will be capped at CPU count
+    pin_memory: true
+    prefetch_factor: 2
+    persistent_workers: true
+    grad_accum_steps: 4
+    mixed_precision: true
+    batch_size_multiplier: 2  # Increase effective batch size
+
+  scheduler:
+    type: "OneCycleLR"  # or "CosineAnnealingLR", etc.
+    params:
+      max_lr_factor: 10.0  # max_lr will be base_lr * max_lr_factor
+      pct_start: 0.3
+      anneal_strategy: "cos"
+      div_factor: 25.0  # initial_lr = max_lr/div_factor
+      final_div_factor: 1e4  # final_lr = initial_lr/final_div_factor
+
+logging:
+  directory: "logs"  # Base directory for all logs
+  console_level: "WARNING"  # Less verbose console output
+  file_level: "INFO"  # Detailed file logging
+  handlers:
+    hyperparameter_tuning:
+      filename: "hyperparameter_tuning.log"
+    training:
+      filename: "training.log"
+    cpu_optimization:
+      filename: "cpu_optimization.log"
