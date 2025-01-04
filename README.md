@@ -1,114 +1,112 @@
-# CPU-Optimized Multiclass Classifier
+# MLP Classifier with Enhanced CPU Performance
 
-A PyTorch-based multiclass classifier optimized for CPU training with advanced performance features and memory efficiency.
+A robust multilayer perceptron (MLP) classifier implementation with advanced CPU optimizations, hyperparameter tuning, and comprehensive validation features.
 
 ## Features
 
-- **CPU Optimizations**
-  - MKL-DNN/oneDNN acceleration support
-  - Automatic mixed precision with bfloat16
-  - Optimized thread configuration
-  - Memory-efficient dataset handling
+### CPU Optimizations
+- Automatic MKL-DNN and MKL optimizations detection and enablement
+- Mixed precision training support (bfloat16 where available)
+- Optimized thread management
+- Memory-efficient data loading with memory mapping
+- Performance monitoring and profiling
 
-- **Training Features**
-  - OneCycleLR learning rate scheduling with warmup
-  - Automated hyperparameter tuning using Optuna
-  - Early stopping with configurable patience
-  - Comprehensive logging and metrics tracking
-  - Memory-efficient dataset loading for large datasets
+### Training & Validation
+- Hyperparameter tuning with Optuna
+- Learning rate scheduling with warmup
+- Cross-validation support
+- Early stopping with configurable patience
+- Checkpoint management
+- Comprehensive model validation including:
+  - Confidence analysis
+  - Confusion matrix visualization
+  - Detailed classification metrics
+  - Per-class performance analysis
 
-- **Monitoring & Debugging**
-  - Learning curves visualization
-  - CPU optimization status logging
-  - Detailed training progress tracking
-  - Performance profiling support
+### Data Management
+- Memory-efficient dataset handling for large datasets
+- Automatic memory threshold detection
+- Optimized data loading with prefetching
+- Support for persistent workers
 
-## Requirements
+## Installation
 
 ```bash
-pip install torch pandas numpy tqdm optuna pyyaml psutil seaborn matplotlib scikit-learn
-```
-
-## Configuration
-
-The system is configured through `config.yaml`. Key configuration sections:
-
-### CPU Optimization Settings
-```yaml
-cpu_optimization:
-  enable_mkldnn: true
-  num_threads: "auto"
-  use_bfloat16: true
-```
-
-### DataLoader Settings
-```yaml
-dataloader:
-  num_workers: 8
-  pin_memory: true
-  persistent_workers: true
-  prefetch_factor: 2
-```
-
-### Performance Settings
-```yaml
-performance:
-  enable_mkldnn: true
-  enable_mkl: true
-  mixed_precision: true
-  batch_size_multiplier: 2
-  grad_accum_steps: 4
+pip install -r requirements.txt
 ```
 
 ## Usage
 
-1. Prepare your data in CSV format with features and a target column.
-2. Update the data paths in `config.yaml`:
-   ```yaml
-   data:
-     train_path: "data/train.csv"
-     val_path: "data/val.csv"
-     target_column: "target"
-   ```
-3. Run the training:
-   ```bash
-   python MLP_trainer.py
-   ```
+1. Configure your model in `config.yaml`
+2. Prepare your data in CSV format
+3. Run the trainer:
 
-## Memory Efficiency
-
-The system includes automatic memory management:
-- Switches to memory-mapped datasets for large data
-- Configurable batch sizes and prefetch factors
-- Automatic cleanup of temporary files
-- Efficient CPU memory utilization
-
-## Logging
-
-Logs are organized in the `logs` directory:
-- `training.log`: Training progress and metrics
-- `cpu_optimization.log`: CPU optimization status
-- `hyperparameter_tuning.log`: Tuning progress and results
-
-## Model Checkpointing
-
-Best models are automatically saved to the path specified in config:
-```yaml
-model:
-  save_path: "checkpoints/best_model.pt"
+```bash
+python MLP_trainer.py
 ```
 
-## Performance Tips
+## Configuration
 
-1. Adjust `batch_size` and `batch_size_multiplier` based on your CPU memory
-2. Set `num_workers` to 2x your CPU cores
-3. Enable `persistent_workers` for faster data loading
-4. Use `mixed_precision` if your CPU supports bfloat16
+Key configuration sections in `config.yaml`:
 
-## Contributing
+```yaml
+training:
+  dataloader:
+    num_workers: 8  # Adjust based on CPU cores
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
 
-Feel free to submit issues and enhancement requests!
+  cpu_optimization:
+    enable_mkldnn: true
+    num_threads: "auto"
+    use_bfloat16: true
+
+  performance:
+    enable_mkl: true
+    mixed_precision: true
+    batch_size_multiplier: 2
+```
+
+## Validation Metrics
+
+The model provides comprehensive validation metrics:
+
+- Overall accuracy and F1-score
+- Per-class precision, recall, and F1-score
+- Confidence analysis for correct/incorrect predictions
+- Visual confusion matrix
+- Cross-validation results with standard deviation
+
+## Performance Monitoring
+
+- CPU optimization status logging
+- Training progress visualization
+- Resource utilization tracking
+- Detailed logging with configurable verbosity
+
+## Examples
+
+See `examples/` directory for usage examples and notebook demonstrations.
 
 ## License
 
-MIT License - See LICENSE file for details
+MIT License
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Submit a pull request
+
+## Citation
+
+If you use this implementation in your research, please cite:
+
+```bibtex
+@software{mlp_classifier,
+  title={MLP Classifier with Enhanced CPU Performance},
+  author={Your Name},
+  year={2024},
+  url={https://github.com/yourusername/multiclass_classifier}
+}
