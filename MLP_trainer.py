@@ -632,14 +632,14 @@ class HyperparameterTuner:
         
         # Initialize CPU optimization
         self.cpu_optimizer = CPUOptimizer(config, self.logger)
-
+        self.optimizer_types = ['Adam', 'SGD']  # Add supported optimizers
+        
     def save_best_model(self, model, optimizer, trial_value, params):
         """Save the best model and its metadata."""
         checkpoint = {
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'optimizer_name': self.config['training']['optimizer_choice'],
-            'metric_name': self.config['training']['optimization_metric'],
+            'optimizer_type': params['optimizer_type'],
             'metric_value': trial_value,
             'hyperparameters': params
         }
@@ -652,23 +652,20 @@ class HyperparameterTuner:
             trial: Optuna trial object
             train_loader: DataLoader for training data, needed for scheduler setup
         """
-        # Remove lr from hyperparameter search
+        # Alternate between optimizers based on trial number
+        optimizer_name = self.optimizer_types[trial.number % len(self.optimizer_types)]
+        
+        # Get model architecture parameters
         hidden_layers = []
         n_layers = trial.suggest_int('n_layers', 1, 4)
         for i in range(n_layers):
             hidden_layers.append(trial.suggest_int(f'hidden_layer_{i}', 32, 512))
         
-        # Get base learning rate from config and ensure it's a float
-        try:
-            base_lr = float(self.config['training']['optimizer_params']['Adam']['base_lr'])
-        except (KeyError, ValueError, TypeError):
-            base_lr = 1e-4  # Default fallback value
-            
         dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.5)
         use_batch_norm = trial.suggest_categorical('use_batch_norm', [True, False])
         weight_decay = 0.0 if use_batch_norm else trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
         
-        # Create model and optimizer
+        # Create model
         model = MLPClassifier(
             input_size=self.config['model']['input_size'],
             hidden_layers=hidden_layers,
@@ -677,45 +674,81 @@ class HyperparameterTuner:
             use_batch_norm=use_batch_norm
         )
         
-        optimizer = getattr(torch.optim, self.config['training']['optimizer_choice'])(
-            model.parameters(),
-            lr=base_lr,
-            weight_decay=weight_decay
-        )
-        
-        # Calculate total steps for the scheduler
-        if train_loader is not None:
-            total_steps = len(train_loader) * self.config['training']['epochs']
+        # Get optimizer parameters based on type
+        if optimizer_name == 'Adam':
+            lr = float(self.config['training']['optimizer_params']['Adam'].get('base_lr', 1e-4))
+            betas = tuple(self.config['training']['optimizer_params']['Adam'].get('betas', (0.9, 0.999)))
+            eps = float(self.config['training']['optimizer_params']['Adam'].get('eps', 1e-8))
             
-            # Create scheduler with total_steps
-            scheduler_config = self.config['training'].get('scheduler', {})
-            if scheduler_config.get('type') == 'OneCycleLR':
-                try:
-                    scheduler = OneCycleLR(
-                        optimizer,
-                        max_lr=base_lr * float(scheduler_config['params']['max_lr_factor']),
-                        total_steps=total_steps,
-                        div_factor=float(scheduler_config['params']['div_factor']),
-                        final_div_factor=float(scheduler_config['params']['final_div_factor']),
-                        pct_start=float(scheduler_config['params']['pct_start']),
-                        anneal_strategy=scheduler_config['params']['anneal_strategy']
-                    )
-                except (KeyError, ValueError, TypeError) as e:
-                    self.logger.warning(f"Failed to create OneCycleLR scheduler: {e}")
-                    scheduler = None
-            else:
-                scheduler = None
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=lr,
+                betas=betas,
+                eps=eps,
+                weight_decay=weight_decay
+            )
+        else:  # SGD
+            lr = float(self.config['training']['optimizer_params']['SGD'].get('lr', 0.01))
+            momentum = float(self.config['training']['optimizer_params']['SGD'].get('momentum', 0.9))
+            
+            optimizer = torch.optim.SGD(
+                model.parameters(),
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay
+            )
         
+        # Record trial parameters
         trial_params = {
+            'optimizer_type': optimizer_name,
             'n_layers': n_layers,
             'hidden_layers': hidden_layers,
-            'lr': base_lr,  # Add base_lr to trial_params
             'dropout_rate': dropout_rate,
             'use_batch_norm': use_batch_norm,
-            'weight_decay': weight_decay
+            'weight_decay': weight_decay,
+            'learning_rate': lr
         }
         
+        # Add optimizer-specific parameters
+        if optimizer_name == 'Adam':
+            trial_params.update({
+                'betas': betas,
+                'eps': eps
+            })
+        else:  # SGD
+            trial_params.update({
+                'momentum': momentum
+            })
+        
+        # Create scheduler if needed
+        scheduler = None
+        if train_loader is not None and self.config['training'].get('scheduler', {}).get('type'):
+            scheduler = self._create_scheduler(optimizer, train_loader)
+        
         return model, optimizer, scheduler, trial_params
+
+    def _create_scheduler(self, optimizer, train_loader):
+        """Helper method to create learning rate scheduler"""
+        total_steps = len(train_loader) * self.config['training']['epochs']
+        scheduler_config = self.config['training'].get('scheduler', {})
+        
+        if scheduler_config.get('type') == 'OneCycleLR':
+            try:
+                scheduler = OneCycleLR(
+                    optimizer,
+                    max_lr=optimizer.param_groups[0]['lr'] * float(scheduler_config['params']['max_lr_factor']),
+                    total_steps=total_steps,
+                    div_factor=float(scheduler_config['params']['div_factor']),
+                    final_div_factor=float(scheduler_config['params']['final_div_factor']),
+                    pct_start=float(scheduler_config['params']['pct_start']),
+                    anneal_strategy=scheduler_config['params']['anneal_strategy']
+                )
+                self.logger.info("Created OneCycleLR scheduler")
+                return scheduler
+            except (KeyError, ValueError, TypeError) as e:
+                self.logger.warning(f"Failed to create OneCycleLR scheduler: {e}")
+                return None
+        return None
 
     # Update objective method to use scheduler
     def objective(self, trial, train_loader, val_loader):
@@ -727,9 +760,11 @@ class HyperparameterTuner:
         # Print trial start with clear separation
         self.logger.info("\n" + "="*50)
         self.logger.info(f"Starting Trial {trial.number}")
+        self.logger.info(f"Optimizer: {trial_params['optimizer_type']}")
         self.logger.info("Parameters:")
         for key, value in trial_params.items():
-            self.logger.info(f"  {key}: {value}")
+            if key != 'optimizer_type':  # Already logged
+                self.logger.info(f"  {key}: {value}")
         self.logger.info("-"*50)
         
         trainer = PyTorchTrainer(
@@ -827,10 +862,10 @@ class HyperparameterTuner:
     # ...rest of existing code...
 
 def restore_best_model(config):
-    """Utility function to restore the best model and its optimizer."""
+    """Restore best model with correct optimizer type"""
     checkpoint = torch.load(config['model']['save_path'], weights_only=True)
     
-    # Create model with saved hyperparameters
+    # Create model
     model = MLPClassifier(
         input_size=config['model']['input_size'],
         hidden_layers=checkpoint['hyperparameters']['hidden_layers'],
@@ -839,12 +874,23 @@ def restore_best_model(config):
         use_batch_norm=checkpoint['hyperparameters']['use_batch_norm']
     )
     
-    # Create optimizer
-    optimizer = getattr(torch.optim, checkpoint['optimizer_name'])(
-        model.parameters(),
-        lr=checkpoint['hyperparameters']['lr'],
-        weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
-    )
+    # Create correct optimizer type
+    optimizer_type = checkpoint['optimizer_type']
+    if optimizer_type == 'Adam':
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=checkpoint['hyperparameters']['learning_rate'],
+            betas=checkpoint['hyperparameters'].get('betas', (0.9, 0.999)),
+            eps=checkpoint['hyperparameters'].get('eps', 1e-8),
+            weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
+        )
+    else:  # SGD
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=checkpoint['hyperparameters']['learning_rate'],
+            momentum=checkpoint['hyperparameters'].get('momentum', 0.9),
+            weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
+        )
     
     # Load states
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -853,7 +899,7 @@ def restore_best_model(config):
     return {
         'model': model,
         'optimizer': optimizer,
-        'metric_name': checkpoint['metric_name'],
+        'optimizer_type': optimizer_type,
         'metric_value': checkpoint['metric_value'],
         'hyperparameters': checkpoint['hyperparameters']
     }

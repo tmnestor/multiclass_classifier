@@ -23,7 +23,7 @@ optimization:
   early_stopping:
     min_delta: 0.001
     patience: 10
-  n_trials: 1000
+  n_trials: 50
   optimization_metric: f1
   regularization:
     batch_norm_prob: 0.5
