@@ -12,7 +12,9 @@ import platform
 import seaborn as sns
 import matplotlib.pyplot as plt
 import yaml
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, confusion_matrix, classification_report
+from sklearn.model_selection import KFold
+
 
 import torch
 import torch.nn as nn
@@ -525,98 +527,13 @@ class PyTorchTrainer:
             )
 
     def train(self, train_loader, val_loader, epochs, metric='accuracy'):
-        """Trains the model for specified number of epochs."""
-        # Setup scheduler if not already done
+        """Trains the model for specified number of epochs. 
+        Monitors specified validation metric for early stopping."""
+        # Change setup_scheduler to setup_warmup_scheduler
         if self.scheduler is None and self.warmup_steps > 0:
             num_training_steps = len(train_loader) * epochs
             self.setup_warmup_scheduler(num_training_steps)
             
-        # ...rest of existing train method code...
-
-    def train_epoch(self, train_loader):
-        """Trains the model for one epoch."""
-        self.model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
-            # Move data to device
-            batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-            
-            # Zero gradients
-            self.optimizer.zero_grad()
-            
-            # Forward pass
-            outputs = self.model(batch_X)
-            loss = self.criterion(outputs, batch_y)
-            
-            # Backward pass
-            loss.backward()
-            
-            # Update weights
-            self.optimizer.step()
-            
-            # Update metrics
-            total_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += batch_y.size(0)
-            correct += (predicted == batch_y).sum().item()
-            
-            # Update schedulers if they exist
-            if self.warmup_steps > 0:
-                if self.current_step < self.warmup_steps:
-                    self.warmup_scheduler.step()
-                elif self.scheduler is not None:
-                    self.scheduler.step()
-                self.current_step += 1
-            
-            # Log batch progress
-            if batch_idx % 10 == 0:  # Log every 10 batches
-                accuracy = 100. * correct / total
-                avg_loss = total_loss / (batch_idx + 1)
-                if self.verbose:
-                    print(f'Train Batch {batch_idx}/{len(train_loader)}: '
-                          f'Loss: {avg_loss:.4f}, Acc: {accuracy:.2f}%')
-        
-        # Calculate epoch metrics
-        epoch_loss = total_loss / len(train_loader)
-        epoch_accuracy = 100. * correct / total
-        
-        return epoch_loss, epoch_accuracy
-
-    def evaluate(self, val_loader):
-        """Evaluates the model on validation data."""
-        self.model.eval()
-        total_loss = 0
-        all_preds = []
-        all_labels = []
-        correct = 0
-        total = 0
-        
-        with torch.no_grad():
-            for batch_X, batch_y in val_loader:
-                batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
-                outputs = self.model(batch_X)
-                loss = self.criterion(outputs, batch_y)
-                total_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
-                total += batch_y.size(0)
-                correct += (predicted == batch_y).sum().item()
-                
-                all_preds.extend(predicted.cpu().numpy())
-                all_labels.extend(batch_y.cpu().numpy())
-        
-        accuracy = 100 * correct / total
-        f1 = f1_score(all_labels, all_preds, average='weighted')
-        return total_loss / len(val_loader), accuracy, f1
-
-    def train(self, train_loader, val_loader, epochs, metric='accuracy'):
-        """Trains the model for specified number of epochs. 
-        Monitors specified validation metric for early stopping."""
-        # Setup scheduler at the start of training
-        self.setup_scheduler(train_loader)
-        
         train_losses, val_losses = [], []
         train_metrics, val_metrics = [], []
         best_val_metric = 0
@@ -704,6 +621,84 @@ class PyTorchTrainer:
         plt.legend()
         plt.savefig('learning_curves.png')
         plt.close()
+
+    def train_epoch(self, train_loader):
+        """Trains the model for one epoch."""
+        self.model.train()
+        total_loss = 0
+        correct = 0
+        total = 0
+        
+        for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
+            # Move data to device
+            batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+            
+            # Zero gradients
+            self.optimizer.zero_grad()
+            
+            # Forward pass
+            outputs = self.model(batch_X)
+            loss = self.criterion(outputs, batch_y)
+            
+            # Backward pass
+            loss.backward()
+            
+            # Update weights
+            self.optimizer.step()
+            
+            # Update metrics
+            total_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += batch_y.size(0)
+            correct += (predicted == batch_y).sum().item()
+            
+            # Update schedulers if they exist
+            if self.warmup_steps > 0:
+                if self.current_step < self.warmup_steps:
+                    self.warmup_scheduler.step()
+                elif self.scheduler is not None:
+                    self.scheduler.step()
+                self.current_step += 1
+            
+            # Log batch progress
+            if batch_idx % 10 == 0:  # Log every 10 batches
+                accuracy = 100. * correct / total
+                avg_loss = total_loss / (batch_idx + 1)
+                if self.verbose:
+                    print(f'Train Batch {batch_idx}/{len(train_loader)}: '
+                          f'Loss: {avg_loss:.4f}, Acc: {accuracy:.2f}%')
+        
+        # Calculate epoch metrics
+        epoch_loss = total_loss / len(train_loader)
+        epoch_accuracy = 100. * correct / total
+        
+        return epoch_loss, epoch_accuracy
+
+    def evaluate(self, val_loader):
+        """Evaluates the model on validation data."""
+        self.model.eval()
+        total_loss = 0
+        all_preds = []
+        all_labels = []
+        correct = 0
+        total = 0
+        
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+                outputs = self.model(batch_X)
+                loss = self.criterion(outputs, batch_y)
+                total_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                total += batch_y.size(0)
+                correct += (predicted == batch_y).sum().item()
+                
+                all_preds.extend(predicted.cpu().numpy())
+                all_labels.extend(batch_y.cpu().numpy())
+        
+        accuracy = 100 * correct / total
+        f1 = f1_score(all_labels, all_preds, average='weighted')
+        return total_loss / len(val_loader), accuracy, f1
 
 class HyperparameterTuner:
     def __init__(self, config):
@@ -1032,13 +1027,13 @@ def save_best_params_to_config(config_path, best_trial, best_params):
     # Format parameters for config
     hidden_layers = [best_params[f'hidden_layer_{i}'] for i in range(best_params['n_layers'])]
     
-    # Get learning rate from config if not in best_params
-    learning_rate = best_params.get('lr', config['training']['optimizer_params']['Adam']['base_lr'])
+    # Get learning rate from config using the correct parameter name
+    learning_rate = best_params.get('lr', config['training']['optimizer_params']['Adam']['lr'])
     
     config['best_model'].update({
         'hidden_layers': hidden_layers,
         'dropout_rate': best_params['dropout_rate'],
-        'learning_rate': learning_rate,  # Use the retrieved learning rate
+        'learning_rate': learning_rate,
         'use_batch_norm': best_params['use_batch_norm'],
         'weight_decay': best_params.get('weight_decay', 0.0),
         'best_metric_name': config['training']['optimization_metric'],
@@ -1130,6 +1125,195 @@ def log_cpu_optimizations(config, logger):
     logger.info(f"  Pin memory: {dataloader_opts.get('pin_memory', False)}")
     logger.info(f"  Persistent workers: {dataloader_opts.get('persistent_workers', False)}")
     logger.info(f"  Prefetch factor: {dataloader_opts.get('prefetch_factor', 2)}")
+
+class ModelValidator:
+    """Handles validation and testing of trained models"""
+    def __init__(self, config, logger=None):
+        self.config = config
+        self.logger = logger or logging.getLogger('ModelValidator')
+        self.validation_results = {}
+        
+    def validate_model(self, model, val_loader, device='cpu'):
+        """Comprehensive model validation"""
+        model.eval()
+        self.validation_results = {
+            'confidence_metrics': self._analyze_confidence(model, val_loader, device),
+            'confusion_matrix': self._generate_confusion_matrix(model, val_loader, device),
+            'classification_report': self._generate_classification_report(model, val_loader, device)
+        }
+        
+        self._log_validation_results()
+        return self.validation_results
+    
+    def _analyze_confidence(self, model, dataloader, device):
+        """Analyze prediction confidences"""
+        all_probs = []
+        all_labels = []
+        with torch.no_grad():
+            for inputs, labels in dataloader:
+                inputs = inputs.to(device)
+                outputs = torch.softmax(model(inputs), dim=1)
+                all_probs.append(outputs.cpu().numpy())
+                all_labels.append(labels.numpy())
+        
+        probs = np.vstack(all_probs)
+        labels = np.concatenate(all_labels)
+        preds = np.argmax(probs, axis=1)
+        
+        confidences = np.max(probs, axis=1)
+        correct_mask = preds == labels
+        
+        return {
+            'avg_confidence_correct': confidences[correct_mask].mean(),
+            'avg_confidence_incorrect': confidences[~correct_mask].mean(),
+            'high_confidence_errors': np.sum((confidences > 0.9) & ~correct_mask),
+            'low_confidence_correct': np.sum((confidences < 0.6) & correct_mask)
+        }
+    
+    def _generate_confusion_matrix(self, model, dataloader, device):
+        """Generate and plot confusion matrix"""
+        y_true = []
+        y_pred = []
+        
+        with torch.no_grad():
+            for inputs, labels in dataloader:
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                _, predicted = torch.max(outputs.data, 1)
+                y_true.extend(labels.numpy())
+                y_pred.extend(predicted.cpu().numpy())
+        
+        cm = confusion_matrix(y_true, y_pred)
+        
+        # Plot confusion matrix
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title('Confusion Matrix')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        plt.savefig('confusion_matrix.png')
+        plt.close()
+        
+        return cm
+    
+    def _generate_classification_report(self, model, dataloader, device):
+        """Generate detailed classification report"""
+        y_true = []
+        y_pred = []
+        
+        with torch.no_grad():
+            for inputs, labels in dataloader:
+                inputs = inputs.to(device)
+                outputs = model(inputs)
+                _, predicted = torch.max(outputs.data, 1)
+                y_true.extend(labels.numpy())
+                y_pred.extend(predicted.cpu().numpy())
+        
+        return classification_report(y_true, y_pred, output_dict=True)
+    
+    def _log_validation_results(self):
+        """Log validation results"""
+        self.logger.info("\nModel Validation Results:")
+        
+        # Log confidence metrics
+        self.logger.info("\nConfidence Analysis:")
+        for metric, value in self.validation_results['confidence_metrics'].items():
+            self.logger.info(f"  {metric}: {value:.4f}")
+        
+        # Log classification report
+        self.logger.info("\nClassification Report:")
+        report = self.validation_results['classification_report']
+        for class_name, metrics in report.items():
+            if isinstance(metrics, dict):
+                self.logger.info(f"\nClass {class_name}:")
+                for metric_name, value in metrics.items():
+                    self.logger.info(f"  {metric_name}: {value:.4f}")
+    
+    def cross_validate(self, model_class, train_dataset, n_splits=5, **model_params):
+        """Perform k-fold cross-validation"""
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        scores = []
+        
+        for fold, (train_idx, val_idx) in enumerate(kf.split(range(len(train_dataset)))):
+            self.logger.info(f"\nFold {fold+1}/{n_splits}")
+            
+            # Create train/val splits
+            train_subsampler = torch.utils.data.SubsetRandomSampler(train_idx)
+            val_subsampler = torch.utils.data.SubsetRandomSampler(val_idx)
+            
+            # Create dataloaders
+            train_loader = torch.utils.data.DataLoader(
+                train_dataset,
+                batch_size=self.config['training']['batch_size'],
+                sampler=train_subsampler,
+                num_workers=min(
+                    self.config['training']['dataloader']['num_workers'],
+                    multiprocessing.cpu_count()
+                ),
+                pin_memory=self.config['training']['dataloader']['pin_memory']
+            )
+            val_loader = torch.utils.data.DataLoader(
+                train_dataset,
+                batch_size=self.config['training']['batch_size'],
+                sampler=val_subsampler,
+                num_workers=min(
+                    self.config['training']['dataloader']['num_workers'],
+                    multiprocessing.cpu_count()
+                ),
+                pin_memory=self.config['training']['dataloader']['pin_memory']
+            )
+            
+            # Create and train model
+            model = model_class(**model_params)
+            
+            # Get optimizer parameters
+            optimizer_name = self.config['training']['optimizer_choice']
+            optimizer_params = self.config['training']['optimizer_params'][optimizer_name].copy()
+            
+            # Handle special cases for optimizer parameters
+            if optimizer_name == 'Adam':
+                # Remove 'base_lr' and use it as 'lr'
+                if 'base_lr' in optimizer_params:
+                    optimizer_params['lr'] = optimizer_params.pop('base_lr')
+            
+            # Create optimizer with correct parameters
+            optimizer = getattr(torch.optim, optimizer_name)(
+                model.parameters(),
+                **optimizer_params
+            )
+            
+            criterion = getattr(nn, self.config['training']['loss_function'])()
+            
+            trainer = PyTorchTrainer(
+                model=model,
+                criterion=criterion,
+                optimizer=optimizer,
+                config=self.config,
+                device=self.config['training']['device'],
+                verbose=False
+            )
+            
+            # Train for specified number of epochs
+            _, _, _, _, fold_score = trainer.train(
+                train_loader,
+                val_loader,
+                self.config['training']['epochs'],
+                metric=self.config['training']['optimization_metric']
+            )
+            
+            scores.append(fold_score)
+            self.logger.info(f"Fold {fold+1} Score: {fold_score:.4f}")
+        
+        mean_score = np.mean(scores)
+        std_score = np.std(scores)
+        self.logger.info(f"\nCross-validation complete:")
+        self.logger.info(f"Mean Score: {mean_score:.4f} ± {std_score:.4f}")
+        
+        return {
+            'mean_score': mean_score,
+            'std_score': std_score,
+            'scores': scores
+        }
 
 def main():
     config_path = 'config.yaml'
@@ -1233,6 +1417,16 @@ def main():
         verbose=True
     )
     
+    # Validate the best model
+    logger.info("\nRunning comprehensive model validation...")
+    validator = ModelValidator(config, logger)
+    print("\n" + "="*50)
+    validation_results = validator.validate_model(
+        model=restored['model'],
+        val_loader=val_loader,
+        device=config['training']['device']
+    )
+    
     # Evaluate restored model
     print("\nEvaluating restored model on validation set...")
     val_loss, val_accuracy, val_f1 = trainer.evaluate(val_loader)
@@ -1246,6 +1440,83 @@ def main():
     print(f"Validation F1-Score: {val_f1:.4f}")
     print(f"\nBest {metric_name.upper()} from tuning: {restored['metric_value']:.4f}")
     print(f"Current {metric_name.upper()}: {metric_value:.4f}")
+    
+    # First run standard evaluation
+    print("\nStandard Model Evaluation:")
+    val_loss, val_accuracy, val_f1 = trainer.evaluate(val_loader)
+    
+    print(f"\nBasic Performance Metrics:")
+    print(f"Validation Loss: {val_loss:.4f}")
+    print(f"Validation Accuracy: {val_accuracy:.2f}%")
+    print(f"Validation F1-Score: {val_f1:.4f}")
+    print(f"\nBest {metric_name.upper()} from tuning: {restored['metric_value']:.4f}")
+    print(f"Current {metric_name.upper()}: {metric_value:.4f}")
+    
+    # Now run comprehensive validation
+    print("\n" + "="*50)
+    print("Running Comprehensive Model Analysis")
+    print("="*50)
+    
+    validator = ModelValidator(config, logger)
+    validation_results = validator.validate_model(
+        model=restored['model'],
+        val_loader=val_loader,
+        device=config['training']['device']
+    )
+    
+    # Print detailed validation results
+    print("\nConfidence Analysis:")
+    conf_metrics = validation_results['confidence_metrics']
+    print(f"Average Confidence (Correct Predictions): {conf_metrics['avg_confidence_correct']:.4f}")
+    print(f"Average Confidence (Incorrect Predictions): {conf_metrics['avg_confidence_incorrect']:.4f}")
+    print(f"High Confidence Errors (>90%): {conf_metrics['high_confidence_errors']}")
+    print(f"Low Confidence Correct (<60%): {conf_metrics['low_confidence_correct']}")
+    
+    print("\nClassification Report:")
+    report = validation_results['classification_report']
+    # Print per-class metrics
+    for class_name, metrics in report.items():
+        if isinstance(metrics, dict):
+            print(f"\nClass {class_name}:")
+            print(f"  Precision: {metrics['precision']:.4f}")
+            print(f"  Recall: {metrics['recall']:.4f}")
+            print(f"  F1-Score: {metrics['f1-score']:.4f}")
+            print(f"  Support: {metrics['support']}")
+    
+    print("\nConfusion Matrix has been saved to 'confusion_matrix.png'")
+    print("="*50)
+
+    print("Performing Cross-Validation")
+    print("="*50)
+    
+    # Create a fresh model with the best parameters for cross-validation
+    cv_model_params = {
+        'input_size': config['model']['input_size'],
+        'hidden_layers': restored['hyperparameters']['hidden_layers'],
+        'num_classes': config['model']['num_classes'],
+        'dropout_rate': restored['hyperparameters']['dropout_rate'],
+        'use_batch_norm': restored['hyperparameters']['use_batch_norm']
+    }
+    
+    # Combine training and validation sets for cross-validation
+    full_dataset = CustomDataset(
+        pd.concat([train_df, val_df], axis=0).reset_index(drop=True),
+        config['data']['target_column']
+    )
+    
+    cv_results = validator.cross_validate(
+        model_class=MLPClassifier,
+        train_dataset=full_dataset,
+        n_splits=config['training']['validation']['cross_validation']['n_splits'],
+        **cv_model_params
+    )
+    
+    print("\nCross-Validation Results:")
+    print(f"Mean Score: {cv_results['mean_score']:.4f} ± {cv_results['std_score']:.4f}")
+    print("Individual Fold Scores:")
+    for i, score in enumerate(cv_results['scores'], 1):
+        print(f"  Fold {i}: {score:.4f}")
+    print("="*50)
 
 if __name__ == "__main__":
     main()
