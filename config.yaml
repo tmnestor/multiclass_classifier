@@ -101,6 +101,12 @@ training:
       div_factor: 25.0  # initial_lr = max_lr/div_factor
       final_div_factor: 1e4  # final_lr = initial_lr/final_div_factor
 
+  checkpointing:
+    enabled: true
+    frequency: 10  # Save checkpoint every N epochs
+    max_checkpoints: 5  # Maximum number of checkpoints to keep
+    save_dir: "checkpoints"
+
 logging:
   directory: "logs"  # Base directory for all logs
   console_level: "WARNING"  # Less verbose console output

@@ -419,6 +419,65 @@ class WarmupScheduler:
         else:
             self.scheduler.step()
 
+class TrainingHistory:
+    """Maintains training history and handles checkpointing"""
+    def __init__(self, config, logger):
+        self.config = config
+        self.logger = logger or logging.getLogger('TrainingHistory')
+        self.history = {
+            'train_losses': [],
+            'val_losses': [],
+            'train_metrics': [],
+            'val_metrics': [],
+            'learning_rates': [],
+            'epochs': [],
+            'checkpoints': []
+        }
+        self.checkpoint_dir = os.path.dirname(config['model']['save_path'])
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        
+    def update(self, epoch, train_loss, val_loss, train_metric, val_metric, lr):
+        """Update training history"""
+        self.history['epochs'].append(epoch)
+        self.history['train_losses'].append(train_loss)
+        self.history['val_losses'].append(val_loss)
+        self.history['train_metrics'].append(train_metric)
+        self.history['val_metrics'].append(val_metric)
+        self.history['learning_rates'].append(lr)
+        
+    def save_checkpoint(self, epoch, model, optimizer, metric_value, params):
+        """Save training checkpoint"""
+        checkpoint_path = os.path.join(
+            self.checkpoint_dir, 
+            f'checkpoint_epoch_{epoch}.pt'
+        )
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'metric_value': metric_value,
+            'hyperparameters': params,
+            'history': self.history
+        }
+        torch.save(checkpoint, checkpoint_path)
+        self.history['checkpoints'].append(checkpoint_path)
+        self.logger.info(f"Saved checkpoint for epoch {epoch}")
+        
+        # Maintain only last N checkpoints
+        max_checkpoints = self.config.get('training', {}).get('max_checkpoints', 5)
+        if len(self.history['checkpoints']) > max_checkpoints:
+            old_checkpoint = self.history['checkpoints'].pop(0)
+            if os.path.exists(old_checkpoint):
+                os.remove(old_checkpoint)
+                
+    def load_checkpoint(self, checkpoint_path):
+        """Load training checkpoint"""
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            self.history = checkpoint['history']
+            return checkpoint
+        return None
+
 class PyTorchTrainer:
     def __init__(self, model, criterion, optimizer, config=None, device='cpu', verbose=False):
         """Initialize trainer with optional config parameter."""
@@ -427,6 +486,10 @@ class PyTorchTrainer:
         self.optimizer = optimizer
         self.device = device
         self.verbose = verbose
+        self.config = config
+        
+        # Get or create logger
+        self.logger = logging.getLogger('PyTorchTrainer')
         
         # Initialize scheduler-related attributes with safe defaults
         self.warmup_steps = 0
@@ -437,8 +500,11 @@ class PyTorchTrainer:
         if config is not None and 'best_model' in config:
             self.warmup_steps = config['best_model'].get('warmup_steps', 0)
             if config['optimization']['warmup']['enabled']:
-                num_training_steps = config['training']['epochs']  # We'll set this properly when train() is called
+                num_training_steps = config['training']['epochs']
                 self.setup_warmup_scheduler(num_training_steps)
+        
+        # Initialize training history with the trainer's logger
+        self.history = TrainingHistory(config, self.logger) if config else None
 
     def setup_warmup_scheduler(self, num_training_steps):
         """Setup the learning rate scheduler with warmup."""
@@ -581,6 +647,27 @@ class PyTorchTrainer:
                 metric_value = val_f1 if metric == 'f1' else val_accuracy
                 current_lr = self.optimizer.param_groups[0]['lr']
                 print(f'Epoch {epoch+1}/{epochs}: Val {metric_name}: {metric_value:.2f}%, LR: {current_lr:.6f}')
+            
+            # Update history
+            if self.history is not None:
+                self.history.update(
+                    epoch=epoch,
+                    train_loss=train_loss,
+                    val_loss=val_loss,
+                    train_metric=train_metric,
+                    val_metric=val_metric,
+                    lr=self.optimizer.param_groups[0]['lr']
+                )
+                
+                # Save periodic checkpoints
+                if (epoch + 1) % self.config.get('training', {}).get('checkpoint_frequency', 10) == 0:
+                    self.history.save_checkpoint(
+                        epoch=epoch,
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        metric_value=val_metric,
+                        params=self.config.get('best_model', {})
+                    )
         
         # Add LR curve to the learning curves plot
         self.plot_learning_curves(train_losses, val_losses, train_metrics, val_metrics, 
@@ -757,16 +844,33 @@ class HyperparameterTuner:
         )
         criterion = getattr(nn, self.config['training']['loss_function'])()
         
-        # Print trial start with clear separation
+        # Enhanced trial start logging with detailed optimizer info
         self.logger.info("\n" + "="*50)
         self.logger.info(f"Starting Trial {trial.number}")
-        self.logger.info(f"Optimizer: {trial_params['optimizer_type']}")
-        self.logger.info("Parameters:")
-        for key, value in trial_params.items():
-            if key != 'optimizer_type':  # Already logged
-                self.logger.info(f"  {key}: {value}")
+        
+        # Log optimizer details
+        optimizer_type = trial_params['optimizer_type']
+        self.logger.info("\nOptimizer Configuration:")
+        self.logger.info(f"  Type: {optimizer_type}")
+        self.logger.info(f"  Learning Rate: {trial_params['learning_rate']}")
+        self.logger.info(f"  Weight Decay: {trial_params['weight_decay']}")
+        
+        if optimizer_type == 'Adam':
+            self.logger.info(f"  Betas: {trial_params['betas']}")
+            self.logger.info(f"  Epsilon: {trial_params['eps']}")
+        else:  # SGD
+            self.logger.info(f"  Momentum: {trial_params['momentum']}")
+        
+        # Log model architecture
+        self.logger.info("\nModel Architecture:")
+        self.logger.info(f"  Number of Layers: {trial_params['n_layers']}")
+        self.logger.info(f"  Hidden Layers: {trial_params['hidden_layers']}")
+        self.logger.info(f"  Dropout Rate: {trial_params['dropout_rate']}")
+        self.logger.info(f"  Batch Normalization: {trial_params['use_batch_norm']}")
+        
         self.logger.info("-"*50)
         
+        # Rest of the existing objective method code...
         trainer = PyTorchTrainer(
             model, criterion, optimizer,
             config=self.config,
@@ -863,46 +967,58 @@ class HyperparameterTuner:
 
 def restore_best_model(config):
     """Restore best model with correct optimizer type"""
-    checkpoint = torch.load(config['model']['save_path'], weights_only=True)
-    
-    # Create model
-    model = MLPClassifier(
-        input_size=config['model']['input_size'],
-        hidden_layers=checkpoint['hyperparameters']['hidden_layers'],
-        num_classes=config['model']['num_classes'],
-        dropout_rate=checkpoint['hyperparameters']['dropout_rate'],
-        use_batch_norm=checkpoint['hyperparameters']['use_batch_norm']
-    )
-    
-    # Create correct optimizer type
-    optimizer_type = checkpoint['optimizer_type']
-    if optimizer_type == 'Adam':
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=checkpoint['hyperparameters']['learning_rate'],
-            betas=checkpoint['hyperparameters'].get('betas', (0.9, 0.999)),
-            eps=checkpoint['hyperparameters'].get('eps', 1e-8),
-            weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
+    try:
+        checkpoint = torch.load(config['model']['save_path'], weights_only=True)
+    except (FileNotFoundError, RuntimeError) as e:
+        logger = logging.getLogger('MLPTrainer')
+        logger.warning(f"Could not load checkpoint: {e}")
+        logger.info("Starting fresh training run")
+        return None
+
+    # Only proceed with model creation if we have a checkpoint
+    try:
+        # Create model
+        model = MLPClassifier(
+            input_size=config['model']['input_size'],
+            hidden_layers=checkpoint['hyperparameters']['hidden_layers'],
+            num_classes=config['model']['num_classes'],
+            dropout_rate=checkpoint['hyperparameters']['dropout_rate'],
+            use_batch_norm=checkpoint['hyperparameters']['use_batch_norm']
         )
-    else:  # SGD
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=checkpoint['hyperparameters']['learning_rate'],
-            momentum=checkpoint['hyperparameters'].get('momentum', 0.9),
-            weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
-        )
-    
-    # Load states
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    return {
-        'model': model,
-        'optimizer': optimizer,
-        'optimizer_type': optimizer_type,
-        'metric_value': checkpoint['metric_value'],
-        'hyperparameters': checkpoint['hyperparameters']
-    }
+        
+        # Create correct optimizer type
+        optimizer_type = checkpoint['optimizer_type']
+        if optimizer_type == 'Adam':
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=checkpoint['hyperparameters']['learning_rate'],
+                betas=checkpoint['hyperparameters'].get('betas', (0.9, 0.999)),
+                eps=checkpoint['hyperparameters'].get('eps', 1e-8),
+                weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
+            )
+        else:  # SGD
+            optimizer = torch.optim.SGD(
+                model.parameters(),
+                lr=checkpoint['hyperparameters']['learning_rate'],
+                momentum=checkpoint['hyperparameters'].get('momentum', 0.9),
+                weight_decay=checkpoint['hyperparameters'].get('weight_decay', 0.0)
+            )
+        
+        # Load states
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        return {
+            'model': model,
+            'optimizer': optimizer,
+            'optimizer_type': optimizer_type,
+            'metric_value': checkpoint['metric_value'],
+            'hyperparameters': checkpoint['hyperparameters']
+        }
+    except Exception as e:
+        logger = logging.getLogger('MLPTrainer')
+        logger.error(f"Error restoring model from checkpoint: {e}")
+        return None
 
 def save_best_params_to_config(config_path, best_trial, best_params):
     """Save best parameters to config file."""
@@ -1066,21 +1182,43 @@ def main():
         persistent_workers=config['training']['dataloader']['persistent_workers']
     )
     
-    # If best parameters don't exist in config, run hyperparameter tuning
-    if 'best_model' not in config:
+    # Ensure checkpoint directory exists
+    os.makedirs(os.path.dirname(config['model']['save_path']), exist_ok=True)
+    
+    need_training = False
+    # Try to restore model first
+    restored = restore_best_model(config)
+    
+    if restored is None:
+        logger.info("No valid checkpoint found. Starting hyperparameter tuning...")
+        need_training = True
+    elif 'best_model' not in config:
+        logger.info("No best model configuration found. Will retrain with restored model as starting point...")
+        need_training = True
+    
+    if need_training:
+        # Run hyperparameter tuning
         tuner = HyperparameterTuner(config)
         best_trial, best_params = tuner.tune(train_loader, val_loader)
         save_best_params_to_config(config_path, best_trial, best_params)
-        # Reload config with saved parameters
+        # Reload config and restore the newly trained model
         config = load_config(config_path)
+        restored = restore_best_model(config)
+        
+        if restored is None:
+            logger.error("Failed to create model even after tuning. Exiting.")
+            sys.exit(1)
     
-    print("\nBest model parameters from config:")
-    for key, value in config['best_model'].items():
-        print(f"    {key}: {value}")
+    # Log model parameters
+    if 'best_model' in config:
+        logger.info("\nBest model parameters from config:")
+        for key, value in config['best_model'].items():
+            logger.info(f"    {key}: {value}")
+    else:
+        logger.info("\nUsing restored model parameters:")
+        for key, value in restored['hyperparameters'].items():
+            logger.info(f"    {key}: {value}")
     
-    # Restore best model from checkpoint
-    print("\nRestoring best model from checkpoint...")
-    restored = restore_best_model(config)
     model = restored['model']
     optimizer = restored['optimizer']
     
